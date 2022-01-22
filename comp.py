@@ -204,7 +204,7 @@ try:
             max_iterations = 1
         times = [None] * (len(segments) - 1)
         iterations = 0
-        while True:
+        while iterations < max_iterations:
             iterations += 1
             times_prev = times.copy()
             base_percentage = simulate_runs(0, timedelta(seconds=0), goal, times_prev)
