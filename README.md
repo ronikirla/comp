@@ -1,5 +1,4 @@
-# comp
-
+```
 This script can be used to create balanced LiveSplit comparisons with customizable parameters, such as goal time,
 recency weighing and so on.
 Outputs split times in text that can be copy-pasted directly into a custom LiveSplit comparison.
@@ -32,3 +31,4 @@ Optional args:
     --chunk <size>
         Bundles up segments into chunks that are given the same percentile when simulating runs.
         This should speed up the process at the cost of accuracy. Not recommended.
+```
