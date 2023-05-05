@@ -12,7 +12,7 @@ Optional args:
     -w <value>
         Recency weighing with geometric decay. Recommended if you have a small amount of valid data, for example after
         finding a new faster route or improving your play significantly.
-        If no weighing method is specified, this is used by default with a value of 0.75 (LiveSplit default).
+        If no weighing method is specified, this is used by default with a value of 0.75.
     --linear
         Recency weighing with a linear decay, most recent split getting weight 1 and oldest getting weight 0.
         Recommended in the long run, when the majority of the splits data is collected with your current route.
