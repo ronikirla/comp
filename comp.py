@@ -33,8 +33,8 @@ Outputs split times in text that can be copy-pasted directly into a custom LiveS
 
 Usage: python <path to the script> <path to your splits file> <target time> [optional args]
 Target time should be given as hh:mm:ss.
-Examples: python comp.py C:\splits.lss 0:12:34 --linear
-          python comp.py C:\splits.lss 0:12:34 -w 0.9 --reset
+Examples: python comp.py C:\\splits.lss 0:12:34 --linear
+          python comp.py C:\\splits.lss 0:12:34 -w 0.9 --reset
 
 Optional args: 
     -w <value>
@@ -196,6 +196,23 @@ try:
                     convergence = 0
         print(f"{percentage()}%")
         return percentage()
+    
+    def find_goal_based_on_percentage(search_start, target_percentage):
+        start_split = 0
+        start_time = timedelta(seconds=0)
+        min = timedelta(seconds=0)
+        max = search_start
+        c = 0
+        while True:
+            mid = (min + max) / 2
+            if c >= 20:
+                return mid
+            c += 1
+            res = simulate_runs(start_split, start_time, mid)
+            if round(res, 5) < round(target_percentage, 5):
+                min = mid
+            elif round(res, 5) > round(target_percentage, 5): 
+                max = mid
 
     def find_reset_splits(goal):
         try:
@@ -248,6 +265,23 @@ try:
         except:
             start_time = timedelta(seconds=0)
         simulate_runs(start_split, start_time, goal)
+    if "--findgoal" in sys.argv:
+        try:
+            target_percentage = sys.argv[sys.argv.index("--findgoal") + 1]
+            new_goal = find_goal_based_on_percentage(goal, float(target_percentage))
+            find_goal_splits(new_goal)
+            if "--out" in sys.argv:
+                try:
+                    with open(sys.argv[sys.argv.index("--out") + 1], "w") as f:
+                        total_seconds = new_goal.total_seconds()
+                        hours, remainder = divmod(total_seconds, 3600)
+                        minutes, seconds = divmod(remainder, 60)
+                        hours_str = f"{int(hours):02}:" if hours > 0 else ""
+                        f.write(f"Simulated top {target_percentage}% time: {hours_str}{int(minutes)}:{int(seconds):02}")
+                except IndexError:
+                    print("out filepath missing")
+        except IndexError:
+            print("findgoal target percentage missing")
     elif "--reset" in sys.argv:
         find_reset_splits(goal)
     else:
