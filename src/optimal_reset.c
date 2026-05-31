@@ -1,20 +1,23 @@
 /**
  * optimal_reset.c
  *
- * Computes optimal reset thresholds by matching the Python comp.py --reset algorithm.
+ * Computes optimal reset thresholds that minimize expected time to PB.
  *
- * Algorithm (matching Python find_reset_splits):
- *
- *   For each iteration:
- *     1. Compute base_percentage = P(PB) from (0,0) with current reset policy
- *     2. For each split s (forward from 1 to n-1):
+ * Algorithm:
+ *   1. Discretize each segment's time distribution into equal-probability bins.
+ *   2. Iteratively refine thresholds:
+ *     a. Compute base_p_pb = P(PB) from (0,0) with current reset policy.
+ *     b. For each split s (forward from 1 to n-1):
  *        Binary search for threshold t* where:
- *          run_progress_factor = goal / (goal - t)
- *          effective_p_pb = repeated_odds(simulate_p_pb(s, t), run_progress_factor)
- *        The threshold is where effective_p_pb ≈ base_percentage
+ *          simulate_p_pb(s, t*) ≈ base_p_pb
+ *        This finds the point where continuing from (s, t) gives the same
+ *        chance of PB as starting fresh from (0,0).
+ *     c. Compute V(0,0) = avg_cycle_time / p_pb under geometric retry model.
+ *     d. Accept thresholds only if V(0,0) improved.
  *
- *   repeated_odds(p, n) = 1 - (1-p)^n
- *     Probability of at least one success in n independent attempts.
+ * The policy-level V(0,0) computation (avg_cycle / p_pb) correctly models
+ * the geometric retry structure, so no repeated_odds heuristic is needed
+ * inside the threshold binary search.
  */
 
 #include "optimal_reset.h"
@@ -167,53 +170,36 @@ static double simulate_p_pb(const DiscreteSegment *segments,
 }
 
 /* ------------------------------------------------------------------ */
-/*  repeated_odds: P(at least one success in n attempts)               */
-/* ------------------------------------------------------------------ */
-
-static double repeated_odds(double p_pb, double n) {
-    if (p_pb <= 0.0) return 0.0;
-    if (p_pb >= 1.0) return 1.0;
-    if (n <= 0.0) return 0.0;
-    if (n >= 1e10) return 1.0; /* avoid underflow */
-    return 1.0 - pow(1.0 - p_pb, n);
-}
-
-/* ------------------------------------------------------------------ */
-/*  Find threshold at split s (Python algorithm)                       */
+/*  Find threshold at split s                                          */
 /* ------------------------------------------------------------------ */
 
 /**
  * Binary search for the threshold t* at split s where
- * effective_p_pb(s, t*) ≈ base_p_pb.
+ * simulate_p_pb(s, t*) ≈ base_p_pb.
  *
- * effective_p_pb(s, t) = repeated_odds(simulate_p_pb(s, t), run_progress_factor)
- * run_progress_factor = goal / (goal - t)
- *
- * If effective_p_pb > base_p_pb: continuing is better, threshold is higher
- * If effective_p_pb < base_p_pb: continuing is worse, threshold is lower
+ * Without resets, P(PB from start) = base_p_pb.
+ * At split s with time t, find the point where continuing gives the
+ * same P(PB) as starting fresh. The policy-level V(0,0) computation
+ * handles the geometric retry structure, so no repeated_odds heuristic
+ * is needed here.
  */
 static double find_threshold_python(const DiscreteSegment *segments,
-                                     int num_segments,
-                                     int s,
-                                     const double *thresholds,
-                                     double goal_time,
-                                     double base_p_pb,
-                                     int num_sims,
-                                     uint64_t seed_base) {
+                                      int num_segments,
+                                      int s,
+                                      const double *thresholds,
+                                      double goal_time,
+                                      double base_p_pb,
+                                      int num_sims,
+                                      uint64_t seed_base) {
     double lo = 0.0;
     double hi = goal_time;
 
-    /* Quick check: at t=0, if effective_p_pb < base_p_pb, always reset */
+    /* Quick check: at t=0, if P(PB) < base_p_pb, always reset */
     {
         double p0 = simulate_p_pb(segments, num_segments, s, 0.0,
                                    thresholds, goal_time, num_sims, seed_base);
-        double rpf = goal_time / (goal_time - 0.0); /* = 1.0 */
-        double eff0 = repeated_odds(p0, rpf);
-        if (eff0 < base_p_pb * 0.99) {
+        if (p0 < base_p_pb * 0.99) {
             return 0.0;
-        }
-        if (eff0 >= base_p_pb * 1.01) {
-            /* At t=0 continuing is still better, need to search */
         }
     }
 
@@ -222,19 +208,15 @@ static double find_threshold_python(const DiscreteSegment *segments,
         double mid = (lo + hi) / 2.0;
 
         if (mid >= goal_time - 0.5) {
-            /* Very close to goal: continuing is essentially doomed */
             hi = mid;
             continue;
         }
 
-        double run_progress_factor = goal_time / (goal_time - mid);
-        double actual_p_pb = simulate_p_pb(segments, num_segments, s, mid,
-                                            thresholds, goal_time, num_sims,
-                                            seed_base + (uint64_t)iter * 7919);
-        double effective_p_pb = repeated_odds(actual_p_pb, run_progress_factor);
+        double p = simulate_p_pb(segments, num_segments, s, mid,
+                                  thresholds, goal_time, num_sims,
+                                  seed_base + (uint64_t)iter * 7919);
 
-        /* Compare to base_p_pb with tolerance */
-        double ratio = effective_p_pb / (base_p_pb > 0.0001 ? base_p_pb : 0.0001);
+        double ratio = p / (base_p_pb > 0.0001 ? base_p_pb : 0.0001);
 
         if (ratio > 1.005) {
             lo = mid; /* continuing is better, raise threshold */
