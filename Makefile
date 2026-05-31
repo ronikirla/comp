@@ -9,7 +9,8 @@ SRCS = $(SRCDIR)/main.c \
        $(SRCDIR)/time.c \
        $(SRCDIR)/pdf.c \
        $(SRCDIR)/parser.c \
-       $(SRCDIR)/simulation.c
+       $(SRCDIR)/simulation.c \
+       $(SRCDIR)/optimal_reset.c
 
 OBJS = $(patsubst $(SRCDIR)/%.c,$(BUILDDIR)/%.o,$(SRCS))
 
@@ -30,8 +31,9 @@ clean:
 	rm -rf $(BUILDDIR) $(TARGET)
 
 # Dependencies (headers)
-$(BUILDDIR)/main.o:    $(SRCDIR)/main.c    $(SRCDIR)/parser.h $(SRCDIR)/simulation.h $(SRCDIR)/time.h $(SRCDIR)/pdf.h
-$(BUILDDIR)/time.o:    $(SRCDIR)/time.c    $(SRCDIR)/time.h
-$(BUILDDIR)/pdf.o:     $(SRCDIR)/pdf.c     $(SRCDIR)/pdf.h $(SRCDIR)/time.h
-$(BUILDDIR)/parser.o:  $(SRCDIR)/parser.c  $(SRCDIR)/parser.h $(SRCDIR)/pdf.h $(SRCDIR)/time.h
-$(BUILDDIR)/simulation.o: $(SRCDIR)/simulation.c $(SRCDIR)/simulation.h $(SRCDIR)/pdf.h $(SRCDIR)/time.h
+$(BUILDDIR)/main.o:           $(SRCDIR)/main.c           $(SRCDIR)/parser.h $(SRCDIR)/simulation.h $(SRCDIR)/optimal_reset.h $(SRCDIR)/time.h $(SRCDIR)/pdf.h
+$(BUILDDIR)/time.o:           $(SRCDIR)/time.c           $(SRCDIR)/time.h
+$(BUILDDIR)/pdf.o:            $(SRCDIR)/pdf.c            $(SRCDIR)/pdf.h $(SRCDIR)/time.h
+$(BUILDDIR)/parser.o:         $(SRCDIR)/parser.c         $(SRCDIR)/parser.h $(SRCDIR)/pdf.h $(SRCDIR)/time.h
+$(BUILDDIR)/simulation.o:     $(SRCDIR)/simulation.c     $(SRCDIR)/simulation.h $(SRCDIR)/pdf.h $(SRCDIR)/time.h
+$(BUILDDIR)/optimal_reset.o:  $(SRCDIR)/optimal_reset.c  $(SRCDIR)/optimal_reset.h $(SRCDIR)/pdf.h $(SRCDIR)/time.h

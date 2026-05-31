@@ -1,5 +1,6 @@
 #include "parser.h"
 #include "simulation.h"
+#include "optimal_reset.h"
 #include "time.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,12 +42,30 @@ static void print_usage(const char *prog) {
         "      hit the goal from the current split as from a fresh reset.\n"
         "      Accounts for IRL time investment. Default iterations: 1.\n"
         "\n"
-        "  --findgoal <percentage>\n"
-        "      Find the goal time that would give the specified success percentage,\n"
-        "      then output the corresponding split times.\n"
-        "\n"
-        "  --out <file>\n"
-        "      Write --findgoal result to the specified file.\n"
+         "  --findgoal <percentage>\n"
+         "      Find the goal time that would give the specified success percentage,\n"
+         "      then output the corresponding split times.\n"
+         "\n"
+         "  --out <file>\n"
+         "      Write --findgoal result to the specified file.\n"
+         "\n"
+         "  --reset-optimal\n"
+         "      Compute optimal reset thresholds via value iteration: for each split,\n"
+         "      binary-search the time where continuing vs resetting gives equal PB odds.\n"
+         "      Minimizes expected time to PB (V(0,0) = E[cycle] / P(PB per cycle)).\n"
+         "\n"
+         "  --optimal-bins <n>\n"
+         "      Number of discretization bins per segment distribution for --reset-optimal.\n"
+         "      More bins = finer resolution but slower. Default: 100.\n"
+         "\n"
+         "  --optimal-iter <n>\n"
+         "      Maximum value-iteration rounds for --reset-optimal. Each round recomputes\n"
+         "      all thresholds then evaluates the policy. Stops early on convergence.\n"
+         "      Default: 50.\n"
+         "\n"
+         "  --optimal-tol <value>\n"
+         "      Relative-change convergence tolerance for --reset-optimal.\n"
+         "      Default: 0.001.\n"
         "\n"
         "  -t, --threads <count>\n"
         "      Number of threads for parallel simulation. Default: all available.\n"
@@ -85,7 +104,11 @@ int main(int argc, char *argv[]) {
     double weight_mul = 0.75;
     int mode_sim = 0;
     int mode_reset = 0;
+    int mode_reset_optimal = 0;
     int mode_findgoal = 0;
+    int reset_optimal_bins = 100;
+    int reset_optimal_max_iter = 50;
+    double reset_optimal_tol = 0.001;
     int sim_start_split = 0;
     Duration sim_start_time = duration_zero();
     double reset_iterations = 1.0;
@@ -112,6 +135,8 @@ int main(int argc, char *argv[]) {
             if (i + 1 < argc && argv[i + 1][0] != '-') {
                 reset_iterations = atof(argv[++i]);
             }
+        } else if (strcmp(argv[i], "--reset-optimal") == 0) {
+            mode_reset_optimal = 1;
         } else if (strcmp(argv[i], "--findgoal") == 0) {
             mode_findgoal = 1;
             if (i + 1 < argc) {
@@ -120,6 +145,18 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--out") == 0) {
             if (i + 1 < argc) {
                 out_file = argv[++i];
+            }
+        } else if (strcmp(argv[i], "--optimal-bins") == 0) {
+            if (i + 1 < argc) {
+                reset_optimal_bins = atoi(argv[++i]);
+            }
+        } else if (strcmp(argv[i], "--optimal-iter") == 0) {
+            if (i + 1 < argc) {
+                reset_optimal_max_iter = atoi(argv[++i]);
+            }
+        } else if (strcmp(argv[i], "--optimal-tol") == 0) {
+            if (i + 1 < argc) {
+                reset_optimal_tol = atof(argv[++i]);
             }
         } else if (strcmp(argv[i], "-t") == 0 || strcmp(argv[i], "--threads") == 0) {
             if (i + 1 < argc) {
@@ -179,6 +216,14 @@ int main(int argc, char *argv[]) {
         }
     } else if (mode_reset) {
         find_reset_splits(segments, num_segments, &goal, reset_iterations);
+    } else if (mode_reset_optimal) {
+        OptimalResetResult result = compute_optimal_reset(segments, num_segments,
+                                                           &goal,
+                                                           reset_optimal_bins,
+                                                           reset_optimal_max_iter,
+                                                           reset_optimal_tol);
+        print_optimal_reset_result(&result, segments, num_segments, &goal);
+        free_optimal_reset_result(&result);
     } else {
         // Default: find_goal_splits
         double pctile = find_percentile_for_goal(segments, num_segments, &goal);
