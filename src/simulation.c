@@ -177,15 +177,8 @@ long long simulate_runs(const SegmentPDF *segments, int num_segments,
                 int reroll = 1;  // chunk_size = 1 (no chunking)
 
                 for (int idx = 0; idx < num_segments; idx++) {
-                    // Reset check before skip (matches Python order)
-                    if (reset_times && idx < num_segments - 1) {
-                        if (reset_times[idx].seconds > 0 &&
-                            sum > reset_times[idx].seconds) {
-                            hit_reset = 1;
-                            break;
-                        }
-                    }
-
+                    /* Python: skip decrement is after the if block,
+                       so skipped segments are completely bypassed */
                     if (skip > 0) {
                         skip--;
                         continue;
@@ -193,6 +186,16 @@ long long simulate_runs(const SegmentPDF *segments, int num_segments,
 
                     if (!lookups[idx].valid) continue;
                     sum += lookups[idx].times[pidx].seconds;
+
+                    /* Python: reset check is INSIDE "if skip <= 0:",
+                       AFTER adding time to sum */
+                    if (reset_times && idx < num_segments - 1) {
+                        if (reset_times[idx].seconds > 0 &&
+                            sum > reset_times[idx].seconds) {
+                            hit_reset = 1;
+                            break;
+                        }
+                    }
 
                     reroll--;
                     if (reroll <= 0) {
@@ -303,8 +306,11 @@ void find_reset_splits(const SegmentPDF *segments, int num_segments,
 
         double base_pct;
         Duration zero = duration_zero();
+        /* On first iteration times_prev is all zeros (like Python None),
+           on subsequent iterations it contains the previous iteration's reset times.
+           Python: simulate_runs(0, timedelta(seconds=0), goal, times_prev) */
         simulate_runs(segments, num_segments, 0, &zero,
-                      goal, NULL, -1, &base_pct);
+                      goal, times_prev, -1, &base_pct);
 
         printf("Base percentage: %.4f%%\n", base_pct);
 
