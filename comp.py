@@ -120,7 +120,7 @@ try:
         def search(min, max):
             percentile = (min + max) / 2
             result = finish_at_percentile(percentile)
-            if abs(result.total_seconds() - goal.total_seconds()) < 0.1:
+            if abs(result.total_seconds() - goal.total_seconds()) < 0.5:
                 return percentile
             elif result > goal:
                 return search(min, max - (max - min) / 2)
