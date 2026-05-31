@@ -6,18 +6,17 @@
  * Algorithm:
  *   1. Discretize each segment's time distribution into equal-probability bins.
  *   2. Iteratively refine thresholds:
- *     a. Compute base_p_pb = P(PB) from (0,0) with current reset policy.
+ *     a. Compute base_etpb = E[T to PB] from (0,0) with current reset policy.
  *     b. For each split s (forward from 1 to n-1):
  *        Binary search for threshold t* where:
- *          simulate_p_pb(s, t*) ≈ base_p_pb
+ *          simulate_etpb_from(s, t*) ≈ base_etpb
  *        This finds the point where continuing from (s, t) gives the same
- *        chance of PB as starting fresh from (0,0).
+ *        expected time to PB as starting fresh from (0,0).
  *     c. Compute V(0,0) = avg_cycle_time / p_pb under geometric retry model.
  *     d. Accept thresholds only if V(0,0) improved.
  *
- * The policy-level V(0,0) computation (avg_cycle / p_pb) correctly models
- * the geometric retry structure, so no repeated_odds heuristic is needed
- * inside the threshold binary search.
+ * Using E[T] directly (instead of P(PB)) accounts for varying cycle costs
+ * across different splits, making the threshold selection more principled.
  */
 
 #include "optimal_reset.h"
@@ -110,95 +109,98 @@ static double sample_segment(const DiscreteSegment *seg, RNG *rng) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Simulate: estimate P(PB) from (start_seg, start_time)              */
+/*  Simulate: estimate E[T] from (start_seg, start_time)               */
 /* ------------------------------------------------------------------ */
 
 /**
  * Run Monte Carlo simulations from state (start_seg, start_time).
- * Returns p_pb = probability of achieving PB in one cycle.
- *
- * A cycle ends when:
- *   - All remaining segments completed and total time < goal (PB)
- *   - All remaining segments completed and total time >= goal (failure)
- *   - Accumulated time exceeds reset threshold at some split (reset)
+ * Returns E[T to PB] = avg_cycle_time / p_pb from this state,
+ * where cycles end on reset or reaching the last segment.
  */
-static double simulate_p_pb(const DiscreteSegment *segments,
-                              int num_segments,
-                              int start_seg,
-                              double start_time,
-                              const double *thresholds,
-                              double goal_time,
-                              int num_sims,
-                              uint64_t seed_base) {
-     int total_pb = 0;
-     int total_sims = 0;
+static double simulate_etpb_from(const DiscreteSegment *segments,
+                                   int num_segments,
+                                   int start_seg,
+                                   double start_time,
+                                   const double *thresholds,
+                                   double goal_time,
+                                   int num_sims,
+                                   uint64_t seed_base) {
+    double total_time = 0.0;
+    int total_pb = 0;
+    int total_sims = 0;
 
-#pragma omp parallel reduction(+ : total_pb) reduction(+ : total_sims)
-     {
-         int tid = omp_get_thread_num();
-         RNG rng = rng_seed(seed_base + (uint64_t)tid * 6364136223846793005ULL);
+#pragma omp parallel reduction(+ : total_time) reduction(+ : total_pb) reduction(+ : total_sims)
+    {
+        int tid = omp_get_thread_num();
+        RNG rng = rng_seed(seed_base + (uint64_t)tid * 6364136223846793005ULL);
 
-         int local_pb = 0;
+        double local_time = 0.0;
+        int local_pb = 0;
 
-         for (int sim = 0; sim < num_sims; sim++) {
-             double t = start_time;
-             int pb = 0;
+        for (int sim = 0; sim < num_sims; sim++) {
+            double t = start_time;
 
-             for (int j = start_seg; j < num_segments; j++) {
-                 double delta = sample_segment(&segments[j], &rng);
-                 t += delta;
+            for (int j = start_seg; j < num_segments; j++) {
+                double delta = sample_segment(&segments[j], &rng);
+                t += delta;
 
-                 if (j < num_segments - 1) {
-                     if (thresholds && thresholds[j] < goal_time && t > thresholds[j]) {
-                         break; /* reset */
-                     }
-                 } else if (j == num_segments - 1) {
-                     if (t < goal_time) {
-                         pb = 1;
-                     }
-                 }
-             }
+                if (j < num_segments - 1) {
+                    if (thresholds && thresholds[j] < goal_time && t > thresholds[j]) {
+                        break; /* reset */
+                    }
+                } else if (j == num_segments - 1) {
+                    if (t < goal_time) {
+                        local_pb++;
+                    }
+                }
+            }
 
-             if (pb) local_pb++;
-         }
+            local_time += (t - start_time);
+        }
 
-         total_pb += local_pb;
-         total_sims += num_sims;
-     }
+        total_time += local_time;
+        total_pb += local_pb;
+        total_sims += num_sims;
+    }
 
-     return (double)total_pb / (double)total_sims;
+    double p_pb = (double)total_pb / (double)total_sims;
+    double avg_cycle = total_time / (double)total_sims;
+
+    if (p_pb < 1e-10) return 1e18;
+    return avg_cycle / p_pb;
 }
 
 /* ------------------------------------------------------------------ */
-/*  Find threshold at split s                                          */
+/*  Find threshold at split s using E[T]                               */
 /* ------------------------------------------------------------------ */
 
 /**
  * Binary search for the threshold t* at split s where
- * simulate_p_pb(s, t*) ≈ base_p_pb.
+ * E[T to PB from (s, t*)] ≈ E[T to PB from (0, 0)].
  *
- * Without resets, P(PB from start) = base_p_pb.
- * At split s with time t, find the point where continuing gives the
- * same P(PB) as starting fresh. The policy-level V(0,0) computation
- * handles the geometric retry structure, so no repeated_odds heuristic
- * is needed here.
+ * This finds the point where continuing from (s, t) gives the same
+ * expected time to PB as starting fresh from (0,0). Unlike the P(PB)
+ * approach, this accounts for varying cycle costs across different
+ * splits, making it more principled.
+ *
+ * E[T from (s,t)] = avg_cycle_from(s,t) / p_pb_from(s,t)
  */
-static double find_threshold_python(const DiscreteSegment *segments,
-                                      int num_segments,
-                                      int s,
-                                      const double *thresholds,
-                                      double goal_time,
-                                      double base_p_pb,
-                                      int num_sims,
-                                      uint64_t seed_base) {
+static double find_threshold_etpb(const DiscreteSegment *segments,
+                                    int num_segments,
+                                    int s,
+                                    const double *thresholds,
+                                    double goal_time,
+                                    double base_etpb,
+                                    int num_sims,
+                                    uint64_t seed_base) {
     double lo = 0.0;
     double hi = goal_time;
 
-    /* Quick check: at t=0, if P(PB) < base_p_pb, always reset */
+    /* Quick check: at t=0, if E[T] >= base_etpb, always reset */
     {
-        double p0 = simulate_p_pb(segments, num_segments, s, 0.0,
-                                   thresholds, goal_time, num_sims, seed_base);
-        if (p0 < base_p_pb * 0.99) {
+        double e0 = simulate_etpb_from(segments, num_segments, s, 0.0,
+                                        thresholds, goal_time, num_sims, seed_base);
+        if (e0 >= base_etpb * 1.01) {
             return 0.0;
         }
     }
@@ -212,16 +214,16 @@ static double find_threshold_python(const DiscreteSegment *segments,
             continue;
         }
 
-        double p = simulate_p_pb(segments, num_segments, s, mid,
-                                  thresholds, goal_time, num_sims,
-                                  seed_base + (uint64_t)iter * 7919);
+        double e = simulate_etpb_from(segments, num_segments, s, mid,
+                                       thresholds, goal_time, num_sims,
+                                       seed_base + (uint64_t)iter * 7919);
 
-        double ratio = p / (base_p_pb > 0.0001 ? base_p_pb : 0.0001);
+        double ratio = e / (base_etpb > 1.0 ? base_etpb : 1.0);
 
-        if (ratio > 1.005) {
-            lo = mid; /* continuing is better, raise threshold */
-        } else if (ratio < 0.995) {
-            hi = mid; /* continuing is worse, lower threshold */
+        if (ratio < 0.995) {
+            lo = mid; /* E[T] is better than baseline, raise threshold */
+        } else if (ratio > 1.005) {
+            hi = mid; /* E[T] is worse than baseline, lower threshold */
         } else {
             return mid; /* within tolerance */
         }
@@ -322,14 +324,11 @@ OptimalResetResult compute_optimal_reset(const SegmentPDF *segments,
     result.goal = *goal;
     result.iterations = 0;
 
-    /* Baseline P(PB) with no resets */
-    double base_p_pb = simulate_p_pb(disc, num_segments, 0, 0.0,
-                                      thresholds, goal_time, num_sims, 12345);
-    result.success_prob = base_p_pb;
+    /* Baseline E[T] with no resets */
+    double base_etpb = result.baseline_etpb;
 
-    printf("Baseline P(PB): %.4f%%\n", base_p_pb * 100.0);
     printf("Baseline E[time to PB]: %.1f seconds (%.1f minutes)\n",
-           result.baseline_etpb, result.baseline_etpb / 60.0);
+           base_etpb, base_etpb / 60.0);
 
     /* Use fewer sims per threshold for speed */
     int threshold_sims = 100000;
@@ -339,41 +338,30 @@ OptimalResetResult compute_optimal_reset(const SegmentPDF *segments,
     double *best_thresholds = calloc((size_t)num_thresholds, sizeof(double));
     for (int i = 0; i < num_thresholds; i++)
         best_thresholds[i] = goal_time;
-    double best_v00 = result.baseline_etpb;
+    double best_v00 = base_etpb;
 
     for (int iter = 0; iter < max_iter; iter++) {
         result.iterations = iter + 1;
 
-        /* Recompute base P(PB) with current thresholds */
-        base_p_pb = simulate_p_pb(disc, num_segments, 0, 0.0,
-                                   thresholds, goal_time, num_sims,
-                                   (uint64_t)(iter + 1) * 7777);
+        /* Recompute base E[T] with current thresholds */
+        base_etpb = simulate_etpb_from(disc, num_segments, 0, 0.0,
+                                        thresholds, goal_time, num_sims,
+                                        (uint64_t)(iter + 1) * 7777);
 
-        printf("\nIteration %d (base P(PB) = %.4f%%):\n",
-               iter + 1, base_p_pb * 100.0);
+        printf("\nIteration %d (base E[T] = %.1f sec = %.2f min):\n",
+               iter + 1, base_etpb, base_etpb / 60.0);
 
-        if (base_p_pb < 0.001) {
-            printf("  Warning: P(PB) too low, estimates may be unreliable\n");
-        }
-
-        /* Compute thresholds forward (split 1 first, matching Python)
-         * Python: for idx, start_split in enumerate(range(1, len(segments))):
-         *   times[idx] = find_threshold for split start_split
-         *   simulate_runs(start_split, t, goal, times, ...)
-         *
-         * Python reset_times[idx] is checked at segment idx in simulate_runs.
-         * So thresholds[s] is checked at segment s, and we simulate from segment s+1
-         * to find threshold[s] (which is checked at segment s).
+        /* Compute thresholds forward
+         * For each split s, find the threshold where E[T] from continuing
+         * equals E[T] from starting fresh.
          */
         for (int s = 0; s < num_thresholds; s++) {
-            // Python: simulate from (start_seg=s+1, start_time=t)
-            // to find threshold for split s+1 (thresholds[s], checked at segment s)
             int start_seg = s + 1;
 
-            double t_star = find_threshold_python(disc, num_segments, start_seg,
-                                                   thresholds, goal_time,
-                                                   base_p_pb, threshold_sims,
-                                                   (uint64_t)(s + 1) * 31337 + (uint64_t)iter * 1000000);
+            double t_star = find_threshold_etpb(disc, num_segments, start_seg,
+                                                 thresholds, goal_time,
+                                                 base_etpb, threshold_sims,
+                                                 (uint64_t)(s + 1) * 31337 + (uint64_t)iter * 1000000);
 
             thresholds[s] = t_star;
             result.thresholds[s].seconds = t_star;
@@ -391,11 +379,6 @@ OptimalResetResult compute_optimal_reset(const SegmentPDF *segments,
         }
 
         /* Compute V(0,0) with new thresholds */
-        double new_p_pb = simulate_p_pb(disc, num_segments, 0, 0.0,
-                                         thresholds, goal_time, num_sims,
-                                         (uint64_t)(iter + 1) * 54321);
-
-         /* Compute avg cycle time and PB count together */
          double total_time = 0.0;
          int total_pb = 0;
          int total_sims = 0;
@@ -423,6 +406,7 @@ OptimalResetResult compute_optimal_reset(const SegmentPDF *segments,
              total_sims += num_sims;
          }
          double avg_cycle = total_time / (double)total_sims;
+         double new_p_pb = (double)total_pb / (double)total_sims;
          double new_v00 = new_p_pb > 1e-10 ? avg_cycle / new_p_pb : 1e18;
 
         printf("  New P(PB): %.4f%%, New V(0,0): %.1f sec = %.2f min\n",
