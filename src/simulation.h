@@ -81,4 +81,21 @@ void run_sim(const SegmentPDF *segments, int num_segments,
              int start_segment, const Duration *start_time,
              const Duration *goal);
 
+/**
+ * Generate goal splits via Monte Carlo simulation + conditional averaging.
+ *
+ * Instead of picking one percentile for all segments, this runs N full
+ * Monte Carlo simulations, selects the K runs whose total time is closest
+ * to the goal, then averages the per-segment times of those K runs.
+ *
+ * @param segments    Array of SegmentPDFs
+ * @param num_segments Number of segments
+ * @param goal        Target goal time
+ * @param num_sims    Total number of Monte Carlo simulations to run
+ * @param num_closest Number of closest runs to average
+ */
+void generate_sim_splits(const SegmentPDF *segments, int num_segments,
+                         const Duration *goal, long long num_sims,
+                         int num_closest);
+
 #endif /* SIMULATION_H */

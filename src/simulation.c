@@ -428,3 +428,201 @@ void run_sim(const SegmentPDF *segments, int num_segments,
                   goal, NULL, -1, &pct);
     printf("%.2f%%\n", pct);
 }
+
+/* ------------------------------------------------------------------ */
+/*  generate_sim_splits  (Monte Carlo + conditional averaging)         */
+/* ------------------------------------------------------------------ */
+/*
+ * Instead of picking one percentile for all segments, this runs N full
+ * Monte Carlo simulations, selects the K runs whose total time is closest
+ * to the goal, then averages the per-segment times of those K runs.
+ *
+ * Memory-efficient: processes simulations in batches. Only the K closest
+ * runs (each with seg_count doubles) are kept in memory at all times.
+ */
+
+typedef struct {
+    double distance;          /* |total - goal| */
+    double seg_times[1];      /* flex array: one double per segment */
+} RunEntry;
+
+/* Max-heap over K RunEntry pointers. Root = largest distance. */
+typedef struct {
+    RunEntry **entries;
+    int        size;
+    int        capacity;
+} ClosestHeap;
+
+static void heap_init(ClosestHeap *h, int capacity) {
+    h->entries  = calloc((size_t)capacity, sizeof(RunEntry *));
+    h->size     = 0;
+    h->capacity = capacity;
+}
+
+static void heap_free(ClosestHeap *h) {
+    for (int i = 0; i < h->size; i++)
+        free(h->entries[i]);
+    free(h->entries);
+}
+
+static void heap_push(ClosestHeap *h, RunEntry *entry) {
+    if (h->size < h->capacity) {
+        h->entries[h->size] = entry;
+        h->size++;
+        int i = h->size - 1;
+        while (i > 0) {
+            int p = (i - 1) / 2;
+            if (h->entries[p]->distance >= entry->distance) break;
+            RunEntry *t = h->entries[p]; h->entries[p] = entry; h->entries[i] = t;
+            i = p;
+        }
+    } else if (entry->distance < h->entries[0]->distance) {
+        free(h->entries[0]);
+        h->entries[0] = entry;
+        int i = 0;
+        while (1) {
+            int best = i, l = 2 * i + 1, r = 2 * i + 2;
+            if (l < h->size && h->entries[l]->distance > h->entries[best]->distance) best = l;
+            if (r < h->size && h->entries[r]->distance > h->entries[best]->distance) best = r;
+            if (best == i) break;
+            RunEntry *t = h->entries[best]; h->entries[best] = h->entries[i]; h->entries[i] = t;
+            i = best;
+        }
+    } else {
+        free(entry);  /* worse than worst-in-heap, discard */
+    }
+}
+
+void generate_sim_splits(const SegmentPDF *segments, int num_segments,
+                         const Duration *goal, long long num_sims,
+                         int num_closest) {
+
+    SegmentLookup *lookups = precompute_lookups(segments, num_segments);
+    if (!lookups) return;
+
+    double goal_sec = goal->seconds;
+    int seg_count   = num_segments;
+
+    /* Heap holds at most K RunEntry structs.
+     * Each entry = sizeof(double) * (1 + seg_count).
+     * For K=10000, seg_count=20 → ~1.6 MB. Very cheap. */
+    size_t entry_size = sizeof(RunEntry) + (size_t)(seg_count - 1) * sizeof(double);
+    ClosestHeap heap;
+    heap_init(&heap, num_closest);
+
+    /* Process in batches so memory stays O(K * seg_count).
+     * BATCH = 16384 runs per batch → tiny temporary buffer. */
+    const long long BATCH = 16384;
+    double *batch_total = malloc(BATCH * sizeof(double));
+    double *batch_segs  = malloc(BATCH * (size_t)seg_count * sizeof(double));
+
+    if (!batch_total || !batch_segs) {
+        fprintf(stderr, "Error: failed to allocate batch buffers\n");
+        free(batch_total); free(batch_segs);
+        heap_free(&heap);
+        free_lookups(lookups, num_segments);
+        return;
+    }
+
+    printf("Running %lld Monte Carlo simulations (batch=%lld)...\n", num_sims, BATCH);
+
+    long long done = 0;
+    int last_pct = -1;
+    while (done < num_sims) {
+        long long batch_size = num_sims - done;
+        if (batch_size > BATCH) batch_size = BATCH;
+
+        /* ---- simulate this batch (parallel) ---- */
+#pragma omp parallel
+        {
+            int tid = omp_get_thread_num();
+            RNG rng = rng_seed((uint64_t)(done + tid + 42) * 2654435761ULL);
+
+#pragma omp for nowait
+            for (long long b = 0; b < batch_size; b++) {
+                double total = 0.0;
+                double *seg_ptr = &batch_segs[(size_t)b * (size_t)seg_count];
+
+                for (int seg = 0; seg < seg_count; seg++) {
+                    if (!lookups[seg].valid) {
+                        seg_ptr[seg] = 0.0;
+                        continue;
+                    }
+                    double pctile = rng_double(&rng);
+                    int pidx = (int)(pctile * 100.0 + 0.5);
+                    if (pidx > 100) pidx = 100;
+                    if (pidx < 0)  pidx = 0;
+                    double st = lookups[seg].times[pidx].seconds;
+                    seg_ptr[seg] = st;
+                    total += st;
+                }
+                batch_total[b] = total;
+            }
+        }
+
+        /* ---- merge batch into heap (single-threaded, fast) ---- */
+        for (long long b = 0; b < batch_size; b++) {
+            double distance = fabs(batch_total[b] - goal_sec);
+            RunEntry *entry = malloc(entry_size);
+            entry->distance = distance;
+            memcpy(entry->seg_times, &batch_segs[(size_t)b * (size_t)seg_count],
+                   (size_t)seg_count * sizeof(double));
+            heap_push(&heap, entry);
+        }
+
+        done += batch_size;
+
+        /* Progress: print every 10% */
+        int pct = (int)((double)done * 100 / num_sims);
+        if (pct / 10 > last_pct / 10 && pct < 100) {
+            last_pct = pct;
+            printf("  Progress: %d%%\n", pct);
+        }
+    }
+
+    free(batch_total);
+    free(batch_segs);
+
+    /* ---------------------------------------------------------------- */
+    /*  Average per-segment times of the K closest runs                 */
+    /* ---------------------------------------------------------------- */
+
+    double *seg_sum = calloc((size_t)seg_count, sizeof(double));
+    if (!seg_sum) {
+        fprintf(stderr, "Error: failed to allocate segment sum buffer\n");
+        heap_free(&heap);
+        free_lookups(lookups, num_segments);
+        return;
+    }
+
+    int k = heap.size;
+    for (int h = 0; h < k; h++) {
+        for (int seg = 0; seg < seg_count; seg++) {
+            seg_sum[seg] += heap.entries[h]->seg_times[seg];
+        }
+    }
+
+    /* ---------------------------------------------------------------- */
+    /*  Print cumulative splits                                         */
+    /* ---------------------------------------------------------------- */
+
+    char buf[64];
+    double worst_dist = (k > 0) ? heap.entries[0]->distance : 0.0;
+    printf("Using %d closest runs (worst distance from goal: %.2fs)\n",
+           k, worst_dist);
+    printf("Simulated splits (conditional average):\n");
+
+    double accum = 0.0;
+    for (int seg = 0; seg < seg_count - 1; seg++) {
+        accum += seg_sum[seg] / (double)k;
+        Duration d = { .seconds = accum };
+        duration_format(&d, buf, sizeof(buf));
+        printf("%s\n", buf);
+    }
+    duration_format(goal, buf, sizeof(buf));
+    printf("%s\n", buf);
+
+    free(seg_sum);
+    heap_free(&heap);
+    free_lookups(lookups, num_segments);
+}

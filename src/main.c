@@ -63,11 +63,18 @@ static void print_usage(const char *prog) {
          "      all thresholds then evaluates the policy. Stops early on convergence.\n"
          "      Default: 50.\n"
          "\n"
-         "  --optimal-tol <value>\n"
-         "      Relative-change convergence tolerance for --reset-optimal.\n"
-         "      Default: 0.001.\n"
-        "\n"
-        "  -t, --threads <count>\n"
+          "  --optimal-tol <value>\n"
+          "      Relative-change convergence tolerance for --reset-optimal.\n"
+          "      Default: 0.001.\n"
+         "\n"
+          "  --sim-splits [num_sims] [num_closest]\n"
+          "      Generate goal splits via Monte Carlo simulation + conditional averaging.\n"
+          "      Runs N full simulations, picks the K runs closest to the goal time,\n"
+          "      then averages the per-segment times of those K runs. This produces\n"
+          "      more realistic splits than the default single-percentile approach.\n"
+          "      Default: 500000 simulations, 10000 closest runs.\n"
+         "\n"
+         "  -t, --threads <count>\n"
         "      Number of threads for parallel simulation. Default: all available.\n"
         "\n"
         "  --help\n"
@@ -106,6 +113,9 @@ int main(int argc, char *argv[]) {
     int mode_reset = 0;
     int mode_reset_optimal = 0;
     int mode_findgoal = 0;
+    int mode_sim_splits = 0;
+    long long sim_splits_n = 500000;
+    int sim_splits_k = 10000;
     int reset_optimal_bins = 100;
     int reset_optimal_max_iter = 50;
     double reset_optimal_tol = 0.001;
@@ -157,6 +167,14 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--optimal-tol") == 0) {
             if (i + 1 < argc) {
                 reset_optimal_tol = atof(argv[++i]);
+            }
+        } else if (strcmp(argv[i], "--sim-splits") == 0) {
+            mode_sim_splits = 1;
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                sim_splits_n = atoll(argv[++i]);
+                if (i + 1 < argc && argv[i + 1][0] != '-') {
+                    sim_splits_k = atoi(argv[++i]);
+                }
             }
         } else if (strcmp(argv[i], "-t") == 0 || strcmp(argv[i], "--threads") == 0) {
             if (i + 1 < argc) {
@@ -224,6 +242,8 @@ int main(int argc, char *argv[]) {
                                                            reset_optimal_tol);
         print_optimal_reset_result(&result, segments, num_segments, &goal);
         free_optimal_reset_result(&result);
+    } else if (mode_sim_splits) {
+        generate_sim_splits(segments, num_segments, &goal, sim_splits_n, sim_splits_k);
     } else {
         // Default: find_goal_splits
         double pctile = find_percentile_for_goal(segments, num_segments, &goal);
