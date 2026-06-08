@@ -327,8 +327,8 @@ OptimalResetResult compute_optimal_reset(const SegmentPDF *segments,
     /* Baseline E[T] with no resets */
     double base_etpb = result.baseline_etpb;
 
-    printf("Baseline E[time to PB]: %.1f seconds (%.1f minutes)\n",
-           base_etpb, base_etpb / 60.0);
+    printf("Baseline E[time to PB]: %.1f seconds (%.2f hours)\n",
+           base_etpb, base_etpb / 3600.0);
 
     /* Use fewer sims per threshold for speed */
     int threshold_sims = 100000;
@@ -348,8 +348,8 @@ OptimalResetResult compute_optimal_reset(const SegmentPDF *segments,
                                         thresholds, goal_time, num_sims,
                                         (uint64_t)(iter + 1) * 7777);
 
-        printf("\nIteration %d (base E[T] = %.1f sec = %.2f min):\n",
-               iter + 1, base_etpb, base_etpb / 60.0);
+        printf("\nIteration %d (base E[T] = %.1f sec = %.2f hours):\n",
+               iter + 1, base_etpb, base_etpb / 3600.0);
 
         /* Compute thresholds forward
          * For each split s, find the threshold where E[T] from continuing
@@ -409,10 +409,10 @@ OptimalResetResult compute_optimal_reset(const SegmentPDF *segments,
          double new_p_pb = (double)total_pb / (double)total_sims;
          double new_v00 = new_p_pb > 1e-10 ? avg_cycle / new_p_pb : 1e18;
 
-        printf("  New P(PB): %.4f%%, New V(0,0): %.1f sec = %.2f min\n",
-               new_p_pb * 100.0, new_v00, new_v00 / 60.0);
-        printf("  Improvement: %.1f sec = %.1f min\n",
-               best_v00 - new_v00, (best_v00 - new_v00) / 60.0);
+        printf("  New P(PB): %.4f%%, New V(0,0): %.1f sec = %.2f hours\n",
+               new_p_pb * 100.0, new_v00, new_v00 / 3600.0);
+        printf("  Improvement: %.1f sec = %.2f hours\n",
+               best_v00 - new_v00, (best_v00 - new_v00) / 3600.0);
 
         /* Only accept if it improves */
         if (new_v00 >= best_v00 || new_v00 >= 1e17) {
@@ -519,20 +519,20 @@ void print_optimal_reset_result(const OptimalResetResult *result,
     printf("\n=== Optimal Reset Policy Results ===\n\n");
 
     printf("Baseline (no resets):\n");
-    printf("  Expected time to PB: %.1f seconds (%.2f minutes)\n",
-           result->baseline_etpb, result->baseline_etpb / 60.0);
+    printf("  Expected time to PB: %.1f seconds (%.2f hours)\n",
+           result->baseline_etpb, result->baseline_etpb / 3600.0);
 
     printf("\nWith optimal resets:\n");
-    printf("  Expected time to PB: %.1f seconds (%.2f minutes)\n",
-           result->v00, result->v00 / 60.0);
-    printf("  Improvement: %.1f seconds (%.2f minutes) = %.1f%%\n",
+    printf("  Expected time to PB: %.1f seconds (%.2f hours)\n",
+           result->v00, result->v00 / 3600.0);
+    printf("  Improvement: %.1f seconds (%.2f hours) = %.1f%%\n",
            result->baseline_etpb - result->v00,
-           (result->baseline_etpb - result->v00) / 60.0,
+           (result->baseline_etpb - result->v00) / 3600.0,
            (1.0 - result->v00 / result->baseline_etpb) * 100.0);
     printf("  P(PB per cycle): %.4f%%\n", result->success_prob * 100.0);
-    printf("  E[cycle time]: %.1f seconds (%.2f minutes)\n",
+    printf("  E[cycle time]: %.1f seconds (%.2f hours)\n",
            result->expected_attempt_time,
-           result->expected_attempt_time / 60.0);
+           result->expected_attempt_time / 3600.0);
 
     printf("\n  Converged: %s (%d iterations)\n",
            result->converged ? "yes" : "no",
