@@ -207,8 +207,8 @@ int parse_lss_file(const char *path, SegmentPDF **segments_out,
                 if (mode == WEIGHT_GEOMETRIC) {
                     double w = 1.0;
                     for (size_t i = temp_count; i > 0; i--) {
-                        w *= geometric_weight;
                         temp_samples[i - 1].weight = w;
+                        w *= geometric_weight;
                     }
                 } else {
                     // Linear: most recent gets 1.0, oldest gets 0.0
@@ -225,9 +225,9 @@ int parse_lss_file(const char *path, SegmentPDF **segments_out,
                     size_t len = temp_count;
                     double w = 1.0;
                     for (size_t i = 0; i < len; i++) {
-                        w -= 1.0 / (double)len;
                         // i=0 is most recent (end of array)
                         temp_samples[len - 1 - i].weight = w;
+                        w -= 1.0 / (double)len;
                     }
                 }
 
