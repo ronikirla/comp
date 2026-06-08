@@ -379,35 +379,35 @@ OptimalResetResult compute_optimal_reset(const SegmentPDF *segments,
         }
 
         /* Compute V(0,0) with new thresholds */
-         double total_time = 0.0;
-         int total_pb = 0;
-         int total_sims = 0;
+        double total_time = 0.0;
+        int total_pb = 0;
+        int total_sims = 0;
 #pragma omp parallel reduction(+ : total_time) reduction(+ : total_pb) reduction(+ : total_sims)
-         {
-             int tid = omp_get_thread_num();
-             RNG rng = rng_seed(((uint64_t)(iter + 1) * 54321) + (uint64_t)tid * 6364136223846793005ULL);
-             double local_time = 0.0;
-             int local_pb = 0;
-             for (int sim = 0; sim < num_sims; sim++) {
-                 double t = 0.0;
-                 int reached_end = 1;
-                 for (int j = 0; j < num_segments; j++) {
-                     t += sample_segment(&disc[j], &rng);
-                     if (j < num_segments - 1 && thresholds[j] < goal_time && t > thresholds[j]) {
-                         reached_end = 0; /* reset */
-                         break;
-                     }
-                 }
-                 local_time += t;
-                 if (reached_end && t < goal_time) local_pb++;
-             }
-             total_time += local_time;
-             total_pb += local_pb;
-             total_sims += num_sims;
-         }
-         double avg_cycle = total_time / (double)total_sims;
-         double new_p_pb = (double)total_pb / (double)total_sims;
-         double new_v00 = new_p_pb > 1e-10 ? avg_cycle / new_p_pb : 1e18;
+        {
+            int tid = omp_get_thread_num();
+            RNG rng = rng_seed(((uint64_t)(iter + 1) * 54321) + (uint64_t)tid * 6364136223846793005ULL);
+            double local_time = 0.0;
+            int local_pb = 0;
+            for (int sim = 0; sim < num_sims; sim++) {
+                double t = 0.0;
+                int reached_end = 1;
+                for (int j = 0; j < num_segments; j++) {
+                    t += sample_segment(&disc[j], &rng);
+                    if (j < num_segments - 1 && thresholds[j] < goal_time && t > thresholds[j]) {
+                        reached_end = 0; /* reset */
+                        break;
+                    }
+                }
+                local_time += t;
+                if (reached_end && t < goal_time) local_pb++;
+            }
+            total_time += local_time;
+            total_pb += local_pb;
+            total_sims += num_sims;
+        }
+        double avg_cycle = total_time / (double)total_sims;
+        double new_p_pb = (double)total_pb / (double)total_sims;
+        double new_v00 = new_p_pb > 1e-10 ? avg_cycle / new_p_pb : 1e18;
 
         printf("  New P(PB): %.4f%%, New V(0,0): %.1f sec = %.2f hours\n",
                new_p_pb * 100.0, new_v00, new_v00 / 3600.0);
